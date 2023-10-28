@@ -1,0 +1,12 @@
+1 -CPU core 0/16 (0 - log mode, (-1) test, (-2) log and save to file log.txt)
+12 -SEED(12,15,18,21,24)
+0 -ALL VARIANT(0/1)
+10 -Derivation Path(m/..../1/O->?) (0->30)
+20 -Derivation Path(m/..../0/0->?) (0->30)
+1 -[m/44'/0'/0'/0/0](BTC 0/1)
+1 -[m/49'/0'/0'/0/0](BTC 0/1)
+1 -[m/84'/0'/0'/0/0](BTC 0/1)
+1 -[m/44'/60'/0'/0/0](ETH 0/1)
+----------------------------------------------------------
+            found to be saved BOBLO.txt
+donate:bc1qg89l3580w7zgqkc54kufgpdyk3ur88d772l9y0
