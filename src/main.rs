@@ -3,46 +3,49 @@ mod data;
 extern crate bitcoin;
 extern crate num_cpus;
 
-use std::{fs::{OpenOptions, File}, time::{Instant, Duration}, io::{BufRead, BufReader, Write}, path::Path, io};
+use std::{fs::{OpenOptions, File}, time::{Instant, Duration}, io::{BufRead, BufReader, Write}, path::Path, io, fs};
 use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::sync::mpsc::Sender;
-use std::io::stdout;
+use std::io::{Read, stdout};
 
 use rustils::parse::boolean::string_to_bool;
 use bloomfilter::Bloom;
 
 use rand::{Rng};
 
-use bitcoin::{Address, network::constants::Network, secp256k1::Secp256k1};
+use bitcoin::{Address, network::Network, secp256k1::Secp256k1};
 use bip39::{Mnemonic, Language, Seed, MnemonicType};
-use bitcoin::bip32::{DerivationPath, ExtendedPrivKey, ExtendedPubKey};
+use bitcoin::bip32::DerivationPath;
+use bitcoin::bip32::Xpriv;
+use bitcoin::bip32::Xpub;
 use bitcoin::secp256k1::All;
 use hex::encode;
 use libsecp256k1::{PublicKey, SecretKey};
 
 use tiny_keccak::{Hasher, Keccak};
 use tokio::task;
+use serde::{Deserialize, Serialize};
 
-const FILE_CONFIG: &str = "confMnem.txt";
+#[derive(Debug, Serialize, Deserialize)]
+struct MetaDataBloom {
+    len_btc: u64,
+    len_eth: u64,
+    number_of_bits: u64,
+    number_of_hash_functions: u32,
+    sip_keys: [(u64, u64); 2],
+}
 
 #[tokio::main]
 async fn main() {
     println!("====================");
-    println!("Find mnemonik v1.0.5");
+    println!("Find mnemonik v1.0.6");
     println!("====================");
-
 
     let count_cpu = num_cpus::get();
     //Чтение настроек, и если их нет создадим
     //-----------------------------------------------------------------
-    let conf = match lines_from_file(&FILE_CONFIG) {
-        Ok(text) => { text }
-        Err(_) => {
-            add_v_file(&FILE_CONFIG, data::get_conf_text().to_string());
-            lines_from_file(&FILE_CONFIG).unwrap()
-        }
-    };
+    let conf = load_db("confMnem.txt");
 
     let mut num_cores: i8 = first_word(&conf[0].to_string()).to_string().parse::<i8>().unwrap();
     let num_seed = first_word(&conf[1].to_string()).to_string();
@@ -56,14 +59,7 @@ async fn main() {
     //---------------------------------------------------------------------
 
     //база известных слов
-    let file_content_lost = match lines_from_file("bip39_words.txt") {
-        Ok(file) => { file }
-        Err(_) => {
-            let dockerfile = include_str!("bip39_words.txt");
-            add_v_file("bip39_words.txt", dockerfile.to_string());
-            lines_from_file("bip39_words.txt").expect("kakoyto_pizdec")
-        }
-    };
+    let file_content_lost = load_db("bip39_words.txt");
 
     //если список изменен включим прогон по всем комбинациям
     let inf = if file_content_lost.len() != 2048 && all_variant == "0".to_string() {
@@ -99,33 +95,70 @@ async fn main() {
              string_to_bool(standart44.clone()), string_to_bool(standart49.clone()),
              string_to_bool(standart84.clone()), string_to_bool(eth44.clone()));
 
-    //btc
-    print!("LOAD ADDRESS BTC");
-    let baza_btc = load_db("btc.txt");
-    let len_btc = baza_btc.len();
-    println!(":{}", len_btc);
-    //eth
-    print!("LOAD ADDRESS ETH");
-    let baza_eth = load_db("eth.txt");
-    let len_eth = baza_eth.len();
-    println!(":{}",len_eth);
 
 
-    //база для поиска
-    let num_items = len_eth+len_btc;
-    let fp_rate = 0.00000001;
-    let mut database = Bloom::new_for_fp_rate(num_items, fp_rate);
 
-    println!("LOAD BLOOM...");
-    //
-    for f in baza_btc {
-        database.set(&f);
-    }
-    for f in baza_eth {
-        database.set(&f);
-    }
+    //если блум есть загрузим его
+    let d_b = Path::new("data.bloom");
+    let m_b = Path::new("metadata.bloom");
+    let database = if d_b.exists() && m_b.exists(){
+        //чтение из файла настроек блума
+        let string_content = fs::read_to_string("metadata.bloom").unwrap();
+        let mb: MetaDataBloom = serde_json::from_str(&string_content).unwrap();
 
-    println!("TOTAL ADDRESS LOAD:{:?}",num_items);
+        //чтение данных блума
+        let f: Vec<u8> = get_file_as_byte_vec("data.bloom");
+        let fd:Vec<u8> = bincode::deserialize(&f[..]).unwrap();
+        let database = Bloom::from_existing(&*fd, mb.number_of_bits, mb.number_of_hash_functions, mb.sip_keys);
+
+        println!("LOAD BLOOM");
+        println!("ADDRESS BTC:{}",mb.len_btc);
+        println!("ADDRESS ETH:{}",mb.len_eth);
+        println!("TOTAL ADDRESS LOAD:{:?}",mb.len_btc+mb.len_eth );
+
+        database
+    }else {
+        //если блума нет будем создавать
+        print!("LOAD ADDRESS BTC");
+        let baza_btc = load_db("btc.txt");
+        let len_btc = baza_btc.len();
+        println!(":{}", len_btc);
+
+        print!("LOAD ADDRESS ETH");
+        let baza_eth = load_db("eth.txt");
+        let len_eth = baza_eth.len();
+        println!(":{}", len_eth);
+
+        //база для поиска
+        let num_items = len_eth + len_btc;
+        let fp_rate = 0.000000001;
+        let mut database = Bloom::new_for_fp_rate(num_items, fp_rate);
+
+        println!("LOAD AND SAVE BLOOM...");
+        //
+        for f in baza_btc {
+            database.set(&f);
+        }
+        for f in baza_eth {
+            database.set(&f);
+        }
+
+        //сохранение данных блума
+        let vec = database.bitmap();
+        let encoded: Vec<u8> = bincode::serialize(&vec).unwrap();
+        add_v_file2("data.bloom",encoded);
+
+        //сохранение в файл настроек блума
+        let save_meta_data = MetaDataBloom { len_btc: len_btc as u64,len_eth: len_eth as u64, number_of_bits: database.number_of_bits(), number_of_hash_functions: database.number_of_hash_functions(), sip_keys: database.sip_keys() };
+        let sj = serde_json::to_string(&save_meta_data).unwrap();
+        let mut output = File::create("metadata.bloom").unwrap();
+        write!(output, "{}", sj).unwrap();
+
+        println!("TOTAL ADDRESS LOAD:{:?}",num_items);
+
+        database
+    };
+
     println!("FIND WORD LOAD:{:?}\n", file_content_lost.len());
 
     // Если 0 значит тест изменим на 1
@@ -198,7 +231,6 @@ async fn main() {
         stdout.flush().unwrap();
     }
 }
-
 
 fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_lost: &Arc<Vec<String>>, settings: &Arc<Vec<String>>) {
     let mut start = Instant::now();
@@ -304,6 +336,7 @@ fn print_and_save(mnemonic: &String, addres: &String) {
     add_v_file("BOBLO.txt", s);
     println!("SAVE TO BOBLO.txt");
     println!("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    println!("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 }
 
 fn lines_from_file(filename: impl AsRef<Path>) -> io::Result<Vec<String>> {
@@ -321,6 +354,27 @@ fn add_v_file(name: &str, data: String) {
         .expect("write failed");
 }
 
+fn add_v_file2(name: &str, data: Vec<u8>) {
+    OpenOptions::new()
+        .read(true)
+        .append(true)
+        .create(true)
+        .open(name)
+        .expect("cannot open file")
+        .write(&*data)
+        .expect("write failed");
+}
+
+
+fn get_file_as_byte_vec(filename: &str) -> Vec<u8> {
+    let mut f = File::open(&filename).expect("no file found");
+    let metadata = fs::metadata(&filename).expect("unable to read metadata");
+    let mut buffer = vec![0; metadata.len() as usize];
+    f.read(&mut buffer).expect("buffer overflow");
+
+    buffer
+}
+
 fn first_word(s: &String) -> &str {
     let bytes = s.as_bytes();
     for (i, &item) in bytes.iter().enumerate() {
@@ -333,30 +387,30 @@ fn first_word(s: &String) -> &str {
 
 
 fn address_from_seed_bip44(seed: &[u8], secp: &Secp256k1<All>, d: usize, n: usize) -> String {
-    let master_private_key = ExtendedPrivKey::new_master(Network::Bitcoin, &seed).unwrap();
+    let master_private_key = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
     let path: DerivationPath = (format!("m/44'/0'/0'/{d}/{n}")).parse().unwrap();
     let child_priv = master_private_key.derive_priv(&secp, &path).unwrap();
-    let child_pub = ExtendedPubKey::from_priv(&secp, &child_priv);
+    let child_pub = Xpub::from_priv(&secp, &child_priv);
     let p = bitcoin::PublicKey::new(child_pub.public_key);
     let a: Address = Address::p2pkh(&p, Network::Bitcoin);
     return a.to_string();
 }
 
 fn address_from_seed_bip49(seed: &[u8], secp: &Secp256k1<All>, d: usize, n: usize) -> String {
-    let master_private_key = ExtendedPrivKey::new_master(Network::Bitcoin, &seed).unwrap();
+    let master_private_key = Xpriv::new_master(Network::Bitcoin, &seed).unwrap();
     let path: DerivationPath = (format!("m/49'/0'/0'/{d}/{n}")).parse().unwrap();
     let child_priv = master_private_key.derive_priv(&secp, &path).unwrap();
-    let child_pub = ExtendedPubKey::from_priv(&secp, &child_priv);
+    let child_pub = Xpub::from_priv(&secp, &child_priv);
     let p = bitcoin::PublicKey::new(child_pub.public_key);
     let a: Address = Address::p2shwpkh(&p, Network::Bitcoin).unwrap();
     return a.to_string();
 }
 
 fn address_from_seed_bip84(seed: &Seed, secp: &Secp256k1<All>, d: usize, n: usize) -> String {
-    let master_private_key = ExtendedPrivKey::new_master(Network::Bitcoin, (&seed).as_ref()).unwrap();
+    let master_private_key = Xpriv::new_master(Network::Bitcoin, (&seed).as_ref()).unwrap();
     let path: DerivationPath = (format!("m/84'/0'/0'/{d}/{n}")).parse().unwrap();
     let child_priv = master_private_key.derive_priv(&secp, &path).unwrap();
-    let child_pub = ExtendedPubKey::from_priv(&secp, &child_priv);
+    let child_pub = Xpub::from_priv(&secp, &child_priv);
     let p = bitcoin::PublicKey::new(child_pub.public_key);
     let a: Address = Address::p2wpkh(&p, Network::Bitcoin).unwrap();
     return a.to_string();
@@ -442,6 +496,8 @@ fn load_db(coin: &str) -> Vec<String> {
             let dockerfile = match coin {
                 "btc.txt" => { include_str!("btc.txt") }
                 "eth.txt" => { include_str!("eth.txt") }
+                "bip39_words.txt" => { include_str!("bip39_words.txt") }
+                "confMnem.txt" => { include_str!("confMnem.txt") }
                 _ => { include_str!("btc.txt") }
             };
             add_v_file(coin, dockerfile.to_string());

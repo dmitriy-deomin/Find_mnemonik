@@ -1,19 +1,3 @@
-pub fn get_conf_text()->String{
-    let t = format!("1 -CPU core 0/{} (0 - log mode, (-1) test, (-2) log and save to file log.txt)\n\
-            12 -SEED(12,15,18,21,24)\n\
-            0 -ALL VARIANT(0/1)\n\
-            10 -Derivation Path(m/..../1/O->?) (0->30)\n\
-            20 -Derivation Path(m/..../0/0->?) (0->30)\n\
-            1 -[m/44'/0'/0'/0/0](BTC 0/1)\n\
-            1 -[m/49'/0'/0'/0/0](BTC 0/1)\n\
-            1 -[m/84'/0'/0'/0/0](BTC 0/1)\n\
-            1 -[m/44'/60'/0'/0/0](ETH 0/1)\n\
-            ----------------------------------------------------------
-            found to be saved BOBLO.txt\n\
-            donate:bc1qg89l3580w7zgqkc54kufgpdyk3ur88d772l9y0", num_cpus::get());
-    t.to_string()
-}
-
 pub const WORDS_BIP39: [&str; 2048] = [
     "abandon", "ability", "able", "about", "above", "absent", "absorb", "abstract", "absurd",
     "abuse", "access", "accident", "account", "accuse", "achieve", "acid", "acoustic", "acquire",
