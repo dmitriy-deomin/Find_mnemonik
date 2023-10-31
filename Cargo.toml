@@ -1,6 +1,6 @@
 [package]
 name = "Find_mnemonik"
-version = "1.0.6"
+version = "1.0.8"
 edition = "2021"
 #это нужно для иконки
 build = "build.rs"

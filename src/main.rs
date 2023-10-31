@@ -3,11 +3,11 @@ mod data;
 extern crate bitcoin;
 extern crate num_cpus;
 
-use std::{fs::{OpenOptions, File}, time::{Instant, Duration}, io::{BufRead, BufReader, Write}, path::Path, io, fs};
+use std::{fs::{OpenOptions, File}, time::{Instant, Duration}, io::{BufRead, BufReader, Write}, path::Path, io};
 use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::sync::mpsc::Sender;
-use std::io::{Read, stdout};
+use std::io::stdout;
 
 use rustils::parse::boolean::string_to_bool;
 use bloomfilter::Bloom;
@@ -25,21 +25,13 @@ use libsecp256k1::{PublicKey, SecretKey};
 
 use tiny_keccak::{Hasher, Keccak};
 use tokio::task;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct MetaDataBloom {
-    len_btc: u64,
-    len_eth: u64,
-    number_of_bits: u64,
-    number_of_hash_functions: u32,
-    sip_keys: [(u64, u64); 2],
-}
+
 
 #[tokio::main]
 async fn main() {
     println!("====================");
-    println!("Find mnemonik v1.0.6");
+    println!("Find mnemonik v1.0.8");
     println!("====================");
 
     let count_cpu = num_cpus::get();
@@ -96,68 +88,7 @@ async fn main() {
              string_to_bool(standart84.clone()), string_to_bool(eth44.clone()));
 
 
-
-
-    //если блум есть загрузим его
-    let d_b = Path::new("data.bloom");
-    let m_b = Path::new("metadata.bloom");
-    let database = if d_b.exists() && m_b.exists(){
-        //чтение из файла настроек блума
-        let string_content = fs::read_to_string("metadata.bloom").unwrap();
-        let mb: MetaDataBloom = serde_json::from_str(&string_content).unwrap();
-
-        //чтение данных блума
-        let f: Vec<u8> = get_file_as_byte_vec("data.bloom");
-        let fd:Vec<u8> = bincode::deserialize(&f[..]).unwrap();
-        let database = Bloom::from_existing(&*fd, mb.number_of_bits, mb.number_of_hash_functions, mb.sip_keys);
-
-        println!("LOAD BLOOM");
-        println!("ADDRESS BTC:{}",mb.len_btc);
-        println!("ADDRESS ETH:{}",mb.len_eth);
-        println!("TOTAL ADDRESS LOAD:{:?}",mb.len_btc+mb.len_eth );
-
-        database
-    }else {
-        //если блума нет будем создавать
-        print!("LOAD ADDRESS BTC");
-        let baza_btc = load_db("btc.txt");
-        let len_btc = baza_btc.len();
-        println!(":{}", len_btc);
-
-        print!("LOAD ADDRESS ETH");
-        let baza_eth = load_db("eth.txt");
-        let len_eth = baza_eth.len();
-        println!(":{}", len_eth);
-
-        //база для поиска
-        let num_items = len_eth + len_btc;
-        let fp_rate = 0.000000001;
-        let mut database = Bloom::new_for_fp_rate(num_items, fp_rate);
-
-        println!("LOAD AND SAVE BLOOM...");
-        //
-        for f in baza_btc {
-            database.set(&f);
-        }
-        for f in baza_eth {
-            database.set(&f);
-        }
-
-        //сохранение данных блума
-        let vec = database.bitmap();
-        let encoded: Vec<u8> = bincode::serialize(&vec).unwrap();
-        add_v_file2("data.bloom",encoded);
-
-        //сохранение в файл настроек блума
-        let save_meta_data = MetaDataBloom { len_btc: len_btc as u64,len_eth: len_eth as u64, number_of_bits: database.number_of_bits(), number_of_hash_functions: database.number_of_hash_functions(), sip_keys: database.sip_keys() };
-        let sj = serde_json::to_string(&save_meta_data).unwrap();
-        let mut output = File::create("metadata.bloom").unwrap();
-        write!(output, "{}", sj).unwrap();
-
-        println!("TOTAL ADDRESS LOAD:{:?}",num_items);
-
-        database
-    };
+    let database = data::get_bloom();
 
     println!("FIND WORD LOAD:{:?}\n", file_content_lost.len());
 
@@ -244,9 +175,9 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
     let bench = string_to_bool(settings[0].to_string());
     let derivation1 = settings[3].to_string().parse::<usize>().unwrap();
     let derivation0 = settings[4].to_string().parse::<usize>().unwrap();
-    let standart44 = string_to_bool(settings[5].to_string());
-    let standart49 = string_to_bool(settings[6].to_string());
-    let standart84 = string_to_bool(settings[7].to_string());
+    let btc44 = string_to_bool(settings[5].to_string());
+    let btc49 = string_to_bool(settings[6].to_string());
+    let btc84 = string_to_bool(settings[7].to_string());
     let test = string_to_bool(settings[8].to_string());
     let eth44 = string_to_bool(settings[9].to_string());
     let log = string_to_bool(settings[10].to_string());
@@ -286,13 +217,13 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
             let seed = Seed::new(&mn, "");
             for i in 0..=1 {
                 for n in 0..=der_size[i] {
-                    if standart44 {
+                    if btc44 {
                         addresa.push(address_from_seed_bip44(&seed.as_ref(), &secp, i, n))
                     }
-                    if standart49 {
+                    if btc49 {
                         addresa.push(address_from_seed_bip49(&seed.as_ref(), &secp, i, n))
                     }
-                    if standart84 {
+                    if btc84 {
                         addresa.push(address_from_seed_bip84(&seed, &secp, i, n))
                     }
                     if eth44 {
@@ -354,26 +285,6 @@ fn add_v_file(name: &str, data: String) {
         .expect("write failed");
 }
 
-fn add_v_file2(name: &str, data: Vec<u8>) {
-    OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(name)
-        .expect("cannot open file")
-        .write(&*data)
-        .expect("write failed");
-}
-
-
-fn get_file_as_byte_vec(filename: &str) -> Vec<u8> {
-    let mut f = File::open(&filename).expect("no file found");
-    let metadata = fs::metadata(&filename).expect("unable to read metadata");
-    let mut buffer = vec![0; metadata.len() as usize];
-    f.read(&mut buffer).expect("buffer overflow");
-
-    buffer
-}
 
 fn first_word(s: &String) -> &str {
     let bytes = s.as_bytes();
@@ -430,7 +341,9 @@ fn address_from_seed_eth(seed: &[u8], d: usize, n: usize) -> String {
     let public = &public.serialize()[1..65];
 
     let mut output = [0u8; 32];
-    keccak_hash_in_place(public, &mut output);
+    let mut hasher = Keccak::v256();
+    hasher.update(public);
+    hasher.finalize(&mut output);
 
     let _score = calc_score(&output);
     let addr = encode(&output[(output.len() - 20)..]);
@@ -451,13 +364,7 @@ fn get_seed(n: u8) -> String {
     }
 }
 
-//eth------------------------------------------------------------------
-#[inline(always)]
-fn keccak_hash_in_place(input: &[u8], output: &mut [u8; 32]) {
-    let mut hasher = Keccak::v256();
-    hasher.update(input);
-    hasher.finalize(output);
-}
+//eth-----------------------------------------------------------------
 
 const NIBBLE_MASK: u8 = 0x0F;
 const SCORE_FOR_LEADING_ZERO: i32 = 100;
