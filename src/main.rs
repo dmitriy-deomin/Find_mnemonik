@@ -19,8 +19,9 @@ use bip39::{Mnemonic, Language, Seed, MnemonicType};
 use bitcoin::bip32::DerivationPath;
 use bitcoin::bip32::Xpriv;
 use bitcoin::bip32::Xpub;
+use bitcoin::hex::DisplayHex;
 use bitcoin::secp256k1::All;
-use hex::encode;
+use hex::{encode, FromHex};
 use libsecp256k1::{PublicKey, SecretKey};
 
 use tiny_keccak::{Hasher, Keccak};
@@ -31,7 +32,7 @@ use tokio::task;
 #[tokio::main]
 async fn main() {
     println!("====================");
-    println!("Find mnemonik v1.0.8");
+    println!("Find mnemonic v1.0.9");
     println!("====================");
 
     let count_cpu = num_cpus::get();
@@ -48,6 +49,7 @@ async fn main() {
     let standart49 = first_word(&conf[6].to_string()).to_string();
     let standart84 = first_word(&conf[7].to_string()).to_string();
     let eth44 = first_word(&conf[8].to_string()).to_string();
+    let trx = first_word(&conf[9].to_string()).to_string();
     //---------------------------------------------------------------------
 
     //база известных слов
@@ -80,12 +82,13 @@ async fn main() {
     -ALL VARIANT:{} {inf}\n\
     -DERIVATION 0:{derivation0}\n\
     -DERIVATION 1:{derivation1}\n\
-    -[m/44'/0'/0'/0/0]:{}\n\
-    -[m/49'/0'/0'/0/0]:{}\n\
-    -[m/84'/0'/0'/0/0]:{}\n\
-    -[m/44'/60'/0'/0/0]:{}\n", string_to_bool(all_variant.clone()),
+    -[m/44'/0'/0'/0/0]BTC:{}\n\
+    -[m/49'/0'/0'/0/0]BTC:{}\n\
+    -[m/84'/0'/0'/0/0]BTC:{}\n\
+    -[m/44'/60'/0'/0/0]ETH:{}\n\
+    -[m/44'/195'/0'/0/0]TRX:{}\n", string_to_bool(all_variant.clone()),
              string_to_bool(standart44.clone()), string_to_bool(standart49.clone()),
-             string_to_bool(standart84.clone()), string_to_bool(eth44.clone()));
+             string_to_bool(standart84.clone()), string_to_bool(eth44.clone()), string_to_bool(trx.clone()));
 
 
     let database = data::get_bloom();
@@ -129,6 +132,7 @@ async fn main() {
     settings.push(test);
     settings.push(eth44);
     settings.push(log);
+    settings.push(trx);
 
     //получать сообщения от потоков
     let (tx, rx) = mpsc::channel();
@@ -181,6 +185,7 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
     let test = string_to_bool(settings[8].to_string());
     let eth44 = string_to_bool(settings[9].to_string());
     let log = string_to_bool(settings[10].to_string());
+    let trx = string_to_bool(settings[11].to_string());
 
     let der_size = vec![derivation0, derivation1];
     let mut addresa = vec![];
@@ -229,6 +234,9 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
                     if eth44 {
                         addresa.push(address_from_seed_eth(&seed.as_ref(), i, n));
                     }
+                    if trx {
+                        addresa.push(address_from_seed_trx(&seed.as_ref(), i, n));
+                    }
 
 
                     for a in addresa.iter() {
@@ -240,7 +248,7 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
                         }
                         if bench {
                             println!("\n{m}");
-                            println!("m/.../{i}/{n} {a}");
+                            println!("{i}/{n} {a}");
                         } else {
                             speed = speed + 1;
                             if start.elapsed() >= Duration::from_secs(1) {
@@ -261,11 +269,11 @@ fn process(file_content: &Arc<Bloom<String>>, tx: Sender<String>, file_content_l
 fn print_and_save(mnemonic: &String, addres: &String) {
     println!("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     println!("!!!!!!!!!!!!!!!!!!!!!!FOUND!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    println!("MNEMOMIC:{}", mnemonic);
+    println!("MNEMONIC:{}", mnemonic);
     println!("ADDRESS:{}", addres);
-    let s = format!("MNEMOMIC:{}\nADDRESS {}\n", mnemonic, addres);
-    add_v_file("BOBLO.txt", s);
-    println!("SAVE TO BOBLO.txt");
+    let s = format!("MNEMONIC:{}\nADDRESS {}\n", mnemonic, addres);
+    add_v_file("FOUND.txt", s);
+    println!("SAVE TO FOUND.txt");
     println!("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     println!("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 }
@@ -352,6 +360,14 @@ fn address_from_seed_eth(seed: &[u8], d: usize, n: usize) -> String {
     return addr.to_string();
 }
 
+fn address_from_seed_trx(seed: &[u8], d: usize, n: usize) -> String {
+    let hdwallet = tiny_hderive::bip32::ExtendedPrivKey::derive(&seed, format!("m/44'/195'/0'/{d}").as_str()).unwrap();
+    let account0 = hdwallet.child(tiny_hderive::bip44::ChildNumber::from_str(format!("{n}").as_str()).unwrap()).unwrap();
+    let pr = keys::Private::from_hex(&account0.secret().to_hex_string(Default::default())).unwrap();
+    let ad =keys::Address::from_private(&pr);
+    ad.to_string()
+}
+
 
 fn get_seed(n: u8) -> String {
     match n {
@@ -402,6 +418,7 @@ fn load_db(coin: &str) -> Vec<String> {
         Err(_) => {
             let dockerfile = match coin {
                 "btc.txt" => { include_str!("btc.txt") }
+                "trx.txt" => { include_str!("trx.txt") }
                 "eth.txt" => { include_str!("eth.txt") }
                 "bip39_words.txt" => { include_str!("bip39_words.txt") }
                 "confMnem.txt" => { include_str!("confMnem.txt") }
